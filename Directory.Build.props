@@ -1,0 +1,44 @@
+<Project>
+
+  <!--
+    BeatSaberDir はここで定義しない。
+    BSMT (BeatSaberModdingTools.Tasks) / 環境変数 / MoreRankInfo.csproj.user が解決する。
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>9</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>MoreRankInfo</AssemblyName>
+    <RootNamespace>MoreRankInfo</RootNamespace>
+    <Version>0.1.0</Version>
+    <Authors>L4yLa</Authors>
+    <Product>MoreRankInfo</Product>
+    <Configurations>Debug;Release</Configurations>
+    <!-- 対象ゲームバージョンは 1.44.1 のみ（Platform 名は他MODとそろえる） -->
+    <Platforms>BS1.44.1</Platforms>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+  </PropertyGroup>
+
+  <!--
+    対象ゲームバージョン（BSTarget）。restore 結果や中間ファイルを版ごとに分けるため、
+    SDK の読み込み前に評価されるこのファイルで BaseIntermediateOutputPath / BaseOutputPath を設定する。
+  -->
+  <PropertyGroup>
+    <BSTarget Condition="'$(BSTarget)' == ''">1.44.1</BSTarget>
+    <BaseIntermediateOutputPath>obj\$(BSTarget)\</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin\$(BSTarget)\</BaseOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin\**;obj\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <BSMTProjectType>BSIPA</BSMTProjectType>
+    <!-- ゲームフォルダへの自動コピーはしない -->
+    <DisableCopyToGame>true</DisableCopyToGame>
+    <DisableZipRelease>true</DisableZipRelease>
+  </PropertyGroup>
+
+</Project>

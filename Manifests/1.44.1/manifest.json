@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/beat-saber-modding-group/BSIPA-MetadataFileSchema/master/Schema.json",
+  "id": "MoreRankInfo",
+  "name": "More Rank Info",
+  "author": "L4yLa",
+  "version": "0.1.0",
+  "description": "Shows today's pp gain, rank changes and the pp gained by your latest score above the ScoreSaber / BeatLeader leaderboard. No work during gameplay.",
+  "gameVersion": "1.44.1",
+  "dependsOn": {
+    "BSIPA": "^4.3.7",
+    "BeatSaberMarkupLanguage": "^1.14.1",
+    "SiraUtil": "^3.4.0"
+  }
+}

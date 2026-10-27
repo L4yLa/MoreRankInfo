@@ -20,7 +20,7 @@ namespace MoreRankInfo.UI
     /// <code>
     /// [icon] Today +12.34pp (+0.112%)          small
     ///        #1234 (+5)   JP #56 (+1)          small, optional (ShowRanks)
-    ///        LastPlayed: +3.21pp (+0.026%)     large
+    ///        LastGain: +3.21pp (+0.026%)     large
     ///        Song - Mapper [Expert+]           small, scrolls when wider than the panel
     /// </code>
     /// It is a child of PlatformLeaderboardViewController, so it is hidden together with the leaderboard
@@ -170,7 +170,7 @@ namespace MoreRankInfo.UI
             _content.pivot = center;
 
             _summary = CreateText("Summary", _content, true);
-            _last = CreateText("LastPlayed", _content, true);
+            _last = CreateText("LastGain", _content, true);
 
             _songViewport = NewRect("SongViewport", _content);
             _songViewport.gameObject.AddComponent<RectMask2D>();
@@ -309,10 +309,10 @@ namespace MoreRankInfo.UI
             var change = state.LastChange;
             if (change == null)
             {
-                last = $"LastPlayed: <color={Neutral}>-</color>";
+                last = $"LastGain: <color={Neutral}>-</color>";
                 return;
             }
-            last = "LastPlayed: " + PPChange(change.DeltaPP, change.BeforePP, "0.00");
+            last = "LastGain: " + PPChange(change.DeltaPP, change.BeforePP, "0.00");
 
             var songBuilder = new StringBuilder(Escape(change.SongName ?? "(unknown)"));
             if (!string.IsNullOrEmpty(change.Mapper))

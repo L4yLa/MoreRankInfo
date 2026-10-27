@@ -10,7 +10,7 @@ namespace MoreRankInfo.Configuration
         public virtual int DateChangeHour { get; set; } = 3;
 
         /// <summary>
-        /// Maximum font size of the "LastPlayed" line; the other lines use a fixed ratio of it.
+        /// Maximum font size of the "LastGain" line; the other lines use a fixed ratio of it.
         /// Text is shrunk automatically to fit the width of the leaderboard panel.
         /// </summary>
         public virtual float FontSize { get; set; } = 10f;

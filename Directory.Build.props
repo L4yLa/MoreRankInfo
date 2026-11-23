@@ -11,7 +11,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>MoreRankInfo</AssemblyName>
     <RootNamespace>MoreRankInfo</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Authors>L4yLa</Authors>
     <Product>MoreRankInfo</Product>
     <Configurations>Debug;Release</Configurations>

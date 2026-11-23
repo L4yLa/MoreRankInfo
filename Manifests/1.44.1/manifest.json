@@ -3,7 +3,7 @@
   "id": "MoreRankInfo",
   "name": "More Rank Info",
   "author": "L4yLa",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shows today's pp gain, rank changes and the pp gained by your latest score above the ScoreSaber / BeatLeader leaderboard. No work during gameplay.",
   "gameVersion": "1.44.1",
   "dependsOn": {

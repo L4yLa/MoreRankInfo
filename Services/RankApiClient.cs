@@ -11,14 +11,14 @@ namespace MoreRankInfo.Services
     internal class RankApiClient : IDisposable
     {
         private const string ScoreSaberApi = "https://scoresaber.com/api/v2";
-        private const string BeatLeaderApi = "https://api.beatleader.xyz";
+        private const string BeatLeaderApi = "https://api.beatleader.com";
 
         private readonly HttpClient _http;
 
         public RankApiClient()
         {
             _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            _http.DefaultRequestHeaders.UserAgent.ParseAdd("MoreRankInfo/0.1.0");
+            _http.DefaultRequestHeaders.UserAgent.ParseAdd("MoreRankInfo/0.1.1");
         }
 
         public void Dispose()

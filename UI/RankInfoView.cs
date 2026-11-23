@@ -4,6 +4,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using BeatSaberMarkupLanguage;
+using BeatSaberMarkupLanguage.Attributes;
 using HMUI;
 using MoreRankInfo.Configuration;
 using MoreRankInfo.Models;
@@ -23,6 +24,8 @@ namespace MoreRankInfo.UI
     ///        LastGain: +3.21pp (+0.026%)     large
     ///        Song - Mapper [Expert+]           small, scrolls when wider than the panel
     /// </code>
+    /// While the service is stopped (its data could not be loaded) only "Failed to load" and a Retry button
+    /// are shown.
     /// It is a child of PlatformLeaderboardViewController, so it is hidden together with the leaderboard
     /// and is inactive during gameplay. Only the song line has a per-frame update, and only while it is
     /// visible and too long to fit.
@@ -43,6 +46,11 @@ namespace MoreRankInfo.UI
         private const string Negative = "#FF6B6B";
         private const string Neutral = "#BBBBBB";
 
+        private const float RetryWidth = 20f;
+        private const float RetryHeight = 7f;
+        private const float RetryFontSize = 4f;
+        private const string RetryButtonBsml = "<button text='Retry' on-click='retry-click'/>";
+
         private readonly PlatformLeaderboardViewController _leaderboardViewController;
         private readonly LeaderboardVisibilityWatcher _visibility;
         private readonly RankDataManager _dataManager;
@@ -56,6 +64,8 @@ namespace MoreRankInfo.UI
         private RectTransform _songViewport;
         private TextMeshProUGUI _song;
         private MarqueeText _marquee;
+        private RectTransform _retryArea;
+        private bool _retryButtonCreated;
         private string _songText;
         private RankService? _iconService;
         private bool _hasIcon;
@@ -95,7 +105,7 @@ namespace MoreRankInfo.UI
                     _root.gameObject.SetActive(false);
                 return;
             }
-            _dataManager.RefreshIfStale(service.Value);
+            _dataManager.RefreshIfNeeded(service.Value);
             Render();
         }
 
@@ -135,7 +145,12 @@ namespace MoreRankInfo.UI
             if (_iconService != service)
                 _ = SetIconAsync(service.Value);
 
-            BuildTexts(service.Value, tracker, _hasIcon, PluginConfig.Instance.ShowRanks, out var summary, out var last, out var song);
+            BuildTexts(service.Value, tracker, _hasIcon, PluginConfig.Instance.ShowRanks, out var summary, out var last, out var song, out var showRetry);
+            // Created on first use: BSML is not always ready when the view itself is built.
+            if (showRetry && !_retryButtonCreated)
+                _retryButtonCreated = CreateRetryButton();
+            if (_retryArea.gameObject.activeSelf != showRetry)
+                _retryArea.gameObject.SetActive(showRetry);
             _summary.text = summary;
             _last.text = last;
             if (song != _songText)
@@ -184,7 +199,51 @@ namespace MoreRankInfo.UI
             _marquee = _songViewport.gameObject.AddComponent<MarqueeText>();
             _marquee.Init(_songViewport, _song);
 
+            _retryArea = NewRect("RetryArea", _content);
+            _retryArea.gameObject.SetActive(false);
+
             ApplyLayout();
+        }
+
+        /// <summary>Returns false when the button could not be created; it is tried again on the next render.</summary>
+        private bool CreateRetryButton()
+        {
+            try
+            {
+                BSMLParser.Instance.Parse(RetryButtonBsml, _retryArea.gameObject, this);
+                var button = _retryArea.GetComponentInChildren<Button>(true);
+                if (button == null)
+                    throw new MissingComponentException("button was not created");
+
+                var rect = (RectTransform)button.transform;
+                rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0f, 0.5f);
+                rect.anchoredPosition = Vector2.zero;
+                var layout = button.GetComponent<LayoutElement>();
+                if (layout == null)
+                    layout = button.gameObject.AddComponent<LayoutElement>();
+                layout.preferredWidth = RetryWidth;
+                layout.preferredHeight = RetryHeight;
+                rect.sizeDelta = new Vector2(RetryWidth, RetryHeight);
+                button.SetButtonTextSize(RetryFontSize);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Retry button could not be created: {ex.Message}");
+                Plugin.Log.Debug(ex);
+                // Remove anything half-built so the next attempt does not add a second button.
+                for (var i = _retryArea.childCount - 1; i >= 0; i--)
+                    UnityEngine.Object.Destroy(_retryArea.GetChild(i).gameObject);
+                return false;
+            }
+        }
+
+        [UIAction("retry-click")]
+        private void OnRetryClicked()
+        {
+            var service = _visibility.Visible;
+            if (service != null)
+                _dataManager.RetryNow(service.Value);
         }
 
         private static RectTransform NewRect(string name, Transform parent)
@@ -227,6 +286,7 @@ namespace MoreRankInfo.UI
             PlaceRow(_summary.rectTransform, 0f, summaryHeight);
             PlaceRow(_last.rectTransform, summaryHeight, BigLine);
             PlaceRow(_songViewport, summaryHeight + BigLine, SmallLine);
+            PlaceRow(_retryArea, summaryHeight, BigLine + SmallLine);
 
             _summary.fontSizeMax = smallMax;
             _last.fontSizeMax = bigMax;
@@ -271,7 +331,7 @@ namespace MoreRankInfo.UI
         // ------------------------------------------------------------------ text
 
         private static void BuildTexts(RankService service, ServiceTracker tracker, bool hasIcon, bool showRanks,
-            out string summary, out string last, out string song)
+            out string summary, out string last, out string song, out bool showRetry)
         {
             var prefix = hasIcon ? string.Empty : $"<b>{service.DisplayName()}</b>  ";
             var state = tracker.State;
@@ -279,13 +339,22 @@ namespace MoreRankInfo.UI
             var baseline = state?.Baseline;
             last = string.Empty;
             song = string.Empty;
+            showRetry = false;
+
+            if (tracker.Stopped)
+            {
+                // Saved values are not shown while stopped; Retry is offered instead (hidden while it runs).
+                showRetry = tracker.Status == FetchStatus.Failed;
+                summary = prefix + (showRetry
+                    ? $"<color={Negative}>Failed to load</color>"
+                    : $"<color={Neutral}>Loading...</color>");
+                return;
+            }
 
             // Values saved on an earlier game day are not today's; wait for fresh data.
             if (current == null || baseline == null || state.BaselineDay != RankDataManager.GameDay())
             {
-                summary = prefix + (tracker.Status == FetchStatus.Failed
-                    ? $"<color={Negative}>Failed to load</color>"
-                    : $"<color={Neutral}>Loading...</color>");
+                summary = prefix + $"<color={Neutral}>Loading...</color>";
                 return;
             }
 

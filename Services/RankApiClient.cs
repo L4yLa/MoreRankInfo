@@ -18,7 +18,7 @@ namespace MoreRankInfo.Services
         public RankApiClient()
         {
             _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            _http.DefaultRequestHeaders.UserAgent.ParseAdd("MoreRankInfo/0.1.1");
+            _http.DefaultRequestHeaders.UserAgent.ParseAdd("MoreRankInfo/0.1.2");
         }
 
         public void Dispose()
@@ -41,7 +41,10 @@ namespace MoreRankInfo.Services
                     // /api/v2/players/{id}: { country, stats: { totalPP, rank, countryRank } }
                     var stats = json["stats"];
                     if (stats == null)
+                    {
+                        Plugin.Log.Warn($"{service} player response has no stats.");
                         return null;
+                    }
                     return new PlayerSnapshot
                     {
                         PP = stats.Value<double>("totalPP"),
@@ -67,7 +70,10 @@ namespace MoreRankInfo.Services
             }
         }
 
-        /// <summary>Returns the player's most recent score, or null.</summary>
+        /// <summary>
+        /// Returns the player's most recent score; its fields are null when the list is empty.
+        /// Returns null only when the request or parsing failed.
+        /// </summary>
         internal async Task<RecentPlay> GetRecentPlayAsync(RankService service, string userId, CancellationToken token)
         {
             var json = await GetJsonAsync(service == RankService.ScoreSaber
@@ -77,10 +83,13 @@ namespace MoreRankInfo.Services
                 return null;
             try
             {
-                var item = (json["data"] as JArray)?.First;
-                var leaderboard = item?["leaderboard"];
+                var data = json["data"] as JArray;
+                var leaderboard = data?.First?["leaderboard"];
                 if (leaderboard == null)
-                    return null;
+                {
+                    Plugin.Log.Debug($"{service} recent scores: no score in the response (items={data?.Count.ToString() ?? "none"}).");
+                    return new RecentPlay();
+                }
                 if (service == RankService.ScoreSaber)
                 {
                     // data[].leaderboard: { map: { songName, levelAuthorName }, difficulty: { difficulty, rawDifficulty } }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using IPA.Loader;
@@ -24,11 +25,18 @@ namespace MoreRankInfo.Services
         internal RankService Service { get; }
         internal FetchStatus Status { get; set; } = FetchStatus.NotLoaded;
         internal ServiceState State { get; set; }
-        internal DateTime LastSuccess { get; set; } = DateTime.MinValue;
+
+        /// <summary>
+        /// Set when the data needed for the display could not be loaded. No request is made until the
+        /// Retry button succeeds; score uploads are ignored meanwhile.
+        /// </summary>
+        internal bool Stopped { get; set; }
 
         internal bool Busy;
         internal bool Pending;
         internal bool PendingAfterUpload;
+        internal bool PendingIsRetry;
+        internal bool PendingManual;
         internal DateTime NotBefore = DateTime.MinValue;
 
         internal ServiceTracker(RankService service)
@@ -38,13 +46,14 @@ namespace MoreRankInfo.Services
     }
 
     /// <summary>
-    /// Fetches player data, keeps the daily baseline and the last pp-changing play.
-    /// All network work starts only while the menu is active; requests made during gameplay
-    /// are kept pending and run when the menu becomes active again.
+    /// Fetches player data once when the menu starts and after every score upload, keeps the daily baseline
+    /// and the last pp-changing play. Data is also fetched when the shown values belong to an earlier game day.
+    /// All network work starts only while the menu is active; requests made during gameplay are kept pending
+    /// and run when the menu becomes active again.
     /// </summary>
     internal class RankDataManager : IInitializable, IDisposable
     {
-        private static readonly TimeSpan RefreshOnShowInterval = TimeSpan.FromMinutes(5);
+        private const int RetryDelaySeconds = 5;
 
         private readonly IPlatform _platform;
         private readonly MenuState _menuState;
@@ -97,28 +106,46 @@ namespace MoreRankInfo.Services
             return tracker;
         }
 
-        /// <summary>Refreshes when the data is stale (new game day or older than a few minutes).</summary>
-        internal void RefreshIfStale(RankService service)
+        /// <summary>Fetches only when there is nothing to show for the current game day.</summary>
+        internal void RefreshIfNeeded(RankService service)
         {
             var tracker = GetTracker(service);
-            if (tracker == null || tracker.Busy || tracker.Pending)
+            if (tracker == null || tracker.Stopped || tracker.Busy || tracker.Pending || tracker.Status == FetchStatus.NotLoaded)
                 return;
-            var stale = tracker.Status != FetchStatus.Loaded
-                || tracker.State?.BaselineDay != GameDay()
-                || DateTime.Now - tracker.LastSuccess > RefreshOnShowInterval;
-            if (stale)
-                RequestRefresh(service, false, 0);
+            var state = tracker.State;
+            if (state?.Latest != null && state.Baseline != null && state.BaselineDay == GameDay())
+                return;
+            RequestRefresh(service, false, 0);
         }
 
         /// <param name="afterUpload">true when triggered by a score upload; only these refreshes record a play change.</param>
         internal void RequestRefresh(RankService service, bool afterUpload, int delaySeconds)
         {
             var tracker = GetTracker(service);
-            if (tracker == null || _cts.IsCancellationRequested)
+            if (tracker == null || tracker.Stopped || _cts.IsCancellationRequested)
+                return;
+            Schedule(tracker, afterUpload, false, false, delaySeconds);
+        }
+
+        /// <summary>Called by the Retry button while the service is stopped. One attempt, no automatic retry.</summary>
+        internal void RetryNow(RankService service)
+        {
+            var tracker = GetTracker(service);
+            if (tracker == null || !tracker.Stopped || tracker.Busy || tracker.Pending || _cts.IsCancellationRequested)
                 return;
 
+            tracker.Status = FetchStatus.Loading;
+            DataChanged?.Invoke(service);
+            Schedule(tracker, false, false, true, 0);
+        }
+
+        private void Schedule(ServiceTracker tracker, bool afterUpload, bool isRetry, bool manual, int delaySeconds)
+        {
+            // A new request replaces a pending retry, so it gets its own retry.
+            tracker.PendingIsRetry = tracker.Pending ? tracker.PendingIsRetry && isRetry : isRetry;
             tracker.Pending = true;
             tracker.PendingAfterUpload |= afterUpload;
+            tracker.PendingManual |= manual;
             if (delaySeconds > 0)
             {
                 var notBefore = DateTime.Now.AddSeconds(delaySeconds);
@@ -153,6 +180,11 @@ namespace MoreRankInfo.Services
         {
             if (!tracker.Pending || tracker.Busy || _cts.IsCancellationRequested)
                 return;
+            if (tracker.Stopped && !tracker.PendingManual)
+            {
+                ClearPending(tracker);
+                return;
+            }
             if (DateTime.Now < tracker.NotBefore)
                 return; // the delayed call will run it
             if (!_menuState.IsInMenu)
@@ -160,42 +192,50 @@ namespace MoreRankInfo.Services
             _ = RunAsync(tracker);
         }
 
-        private async Task RunAsync(ServiceTracker tracker)
+        private static void ClearPending(ServiceTracker tracker)
         {
-            tracker.Busy = true;
-            var afterUpload = tracker.PendingAfterUpload;
             tracker.Pending = false;
             tracker.PendingAfterUpload = false;
+            tracker.PendingIsRetry = false;
+            tracker.PendingManual = false;
+        }
+
+        private async Task RunAsync(ServiceTracker tracker)
+        {
+            var service = tracker.Service;
+            var afterUpload = tracker.PendingAfterUpload;
+            var isRetry = tracker.PendingIsRetry;
+            var manual = tracker.PendingManual;
+            ClearPending(tracker);
+            tracker.Busy = true;
+            var failed = false;
             try
             {
-                if (tracker.Status != FetchStatus.Loaded)
+                if (tracker.Status != FetchStatus.Loaded && tracker.Status != FetchStatus.Loading)
                 {
                     tracker.Status = FetchStatus.Loading;
-                    DataChanged?.Invoke(tracker.Service);
+                    DataChanged?.Invoke(service);
                 }
 
-                var userId = await GetUserIdAsync();
-                if (_cts.IsCancellationRequested)
-                    return;
+                var userId = GetUserId();
                 if (userId == null)
                 {
-                    tracker.Status = FetchStatus.Failed;
+                    failed = true;
                     return;
                 }
                 if (tracker.State == null)
                 {
                     // Show today's saved values while the first request is in flight.
-                    tracker.State = _store.Get(tracker.Service, userId);
-                    DataChanged?.Invoke(tracker.Service);
+                    tracker.State = _store.Get(service, userId);
+                    DataChanged?.Invoke(service);
                 }
 
-                var snapshot = await _api.GetPlayerAsync(tracker.Service, userId, _cts.Token);
+                var snapshot = await _api.GetPlayerAsync(service, userId, _cts.Token);
                 if (_cts.IsCancellationRequested)
                     return;
                 if (snapshot == null)
                 {
-                    if (tracker.Status != FetchStatus.Loaded)
-                        tracker.Status = FetchStatus.Failed;
+                    failed = true;
                     return;
                 }
 
@@ -204,24 +244,51 @@ namespace MoreRankInfo.Services
                     return;
                 _store.Save();
                 tracker.Status = FetchStatus.Loaded;
-                tracker.LastSuccess = DateTime.Now;
+                if (tracker.Stopped)
+                {
+                    tracker.Stopped = false;
+                    Plugin.Log.Info($"{service}: data loaded, resumed.");
+                }
+            }
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+            {
             }
             catch (Exception ex)
             {
-                Plugin.Log.Error($"{tracker.Service} refresh failed: {ex.Message}");
+                Plugin.Log.Error($"{service} refresh failed: {ex.Message}");
                 Plugin.Log.Debug(ex);
-                if (tracker.Status != FetchStatus.Loaded)
-                    tracker.Status = FetchStatus.Failed;
+                failed = true;
             }
             finally
             {
                 tracker.Busy = false;
                 if (!_cts.IsCancellationRequested)
                 {
-                    DataChanged?.Invoke(tracker.Service);
+                    if (failed)
+                        HandleFailure(tracker, afterUpload, isRetry, manual);
+                    DataChanged?.Invoke(service);
                     TryRun(tracker);
                 }
             }
+        }
+
+        private void HandleFailure(ServiceTracker tracker, bool afterUpload, bool isRetry, bool manual)
+        {
+            var service = tracker.Service;
+            if (!isRetry && !manual)
+            {
+                Plugin.Log.Debug($"{service}: fetch failed, retrying in {RetryDelaySeconds}s.");
+                Schedule(tracker, afterUpload, true, false, RetryDelaySeconds);
+                return;
+            }
+            if (afterUpload && tracker.Status == FetchStatus.Loaded)
+            {
+                Plugin.Log.Warn($"{service}: refresh after the score upload failed; skipped.");
+                return;
+            }
+            tracker.Stopped = true;
+            tracker.Status = FetchStatus.Failed;
+            Plugin.Log.Warn($"{service}: data could not be loaded; stopped until Retry is pressed.");
         }
 
         private async Task ApplySnapshotAsync(ServiceTracker tracker, string userId, PlayerSnapshot snapshot, bool afterUpload)
@@ -239,7 +306,9 @@ namespace MoreRankInfo.Services
 
             if (afterUpload && previous != null && Math.Abs(snapshot.PP - previous.PP) >= 0.005)
             {
-                var recent = await _api.GetRecentPlayAsync(tracker.Service, userId, _cts.Token);
+                var recent = await GetRecentPlayWithRetryAsync(tracker.Service, userId);
+                if (_cts.IsCancellationRequested)
+                    return;
                 state.LastChange = new PlayChange
                 {
                     SongName = recent?.SongName,
@@ -254,8 +323,44 @@ namespace MoreRankInfo.Services
             state.Latest = snapshot;
         }
 
+        /// <summary>Returns null when both attempts failed. The retry waits until the menu is active.</summary>
+        private async Task<RecentPlay> GetRecentPlayWithRetryAsync(RankService service, string userId)
+        {
+            var recent = await _api.GetRecentPlayAsync(service, userId, _cts.Token);
+            if (recent != null || _cts.IsCancellationRequested)
+                return recent;
+
+            Plugin.Log.Debug($"{service}: recent play fetch failed, retrying in {RetryDelaySeconds}s.");
+            await Task.Delay(TimeSpan.FromSeconds(RetryDelaySeconds), _cts.Token);
+            await WaitForMenuAsync();
+            recent = await _api.GetRecentPlayAsync(service, userId, _cts.Token);
+            if (recent == null && !_cts.IsCancellationRequested)
+                Plugin.Log.Warn($"{service}: recent play could not be loaded; the song is shown as unknown.");
+            return recent;
+        }
+
+        private Task WaitForMenuAsync()
+        {
+            if (_menuState.IsInMenu)
+                return Task.CompletedTask;
+            var tcs = new TaskCompletionSource<bool>();
+            Action handler = null;
+            handler = () =>
+            {
+                _menuState.EnteredMenu -= handler;
+                tcs.TrySetResult(true);
+            };
+            _menuState.EnteredMenu += handler;
+            _cts.Token.Register(() =>
+            {
+                _menuState.EnteredMenu -= handler;
+                tcs.TrySetCanceled();
+            });
+            return tcs.Task;
+        }
+
         // Same source as ScoreSaber (Legato GamePlatformAdapter) on 1.44: IPlatform.user.userId.
-        private Task<string> GetUserIdAsync()
+        private string GetUserId()
         {
             if (_userId == null)
             {
@@ -263,7 +368,7 @@ namespace MoreRankInfo.Services
                 {
                     var user = _platform?.user;
                     if (user != null && user.userId != 0)
-                        _userId = user.userId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        _userId = user.userId.ToString(CultureInfo.InvariantCulture);
                     else
                         Plugin.Log.Warn("Platform user is not available yet.");
                 }
@@ -273,7 +378,7 @@ namespace MoreRankInfo.Services
                     Plugin.Log.Debug(ex);
                 }
             }
-            return Task.FromResult(_userId);
+            return _userId;
         }
 
         internal static string GameDay()
